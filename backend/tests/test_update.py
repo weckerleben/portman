@@ -103,6 +103,7 @@ def test_check_returns_none_when_not_installed(portman_home, monkeypatch):
 
 
 def test_notify_prints_when_update_available(monkeypatch):
+    monkeypatch.delenv("PORTMAN_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr(update, "check_for_update", lambda: "9.9.9")
     monkeypatch.setattr(update, "installed_version", lambda: "0.1.0")
     out = io.StringIO()
@@ -115,6 +116,7 @@ def test_notify_prints_when_update_available(monkeypatch):
 
 
 def test_notify_silent_when_current(monkeypatch):
+    monkeypatch.delenv("PORTMAN_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr(update, "check_for_update", lambda: None)
     out = io.StringIO()
 
