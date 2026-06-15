@@ -7,6 +7,7 @@ the local HTTP API.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -20,6 +21,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from . import __version__
 from . import ai as ai_mod
 from . import config, credentials, detect
 from . import update as update_mod
@@ -29,8 +31,23 @@ app = typer.Typer(help="Local port & service manager.", no_args_is_help=True)
 console = Console()
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(__version__, highlight=False)
+        raise typer.Exit()
+
+
 @app.callback()
-def _main() -> None:
+def _main(
+    version: bool = typer.Option(
+        None,
+        "--version",
+        "-v",
+        help="Show the portman version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
     """Local port & service manager."""
     # Best-effort, cache-gated, fail-silent "new version available" nudge.
     update_mod.notify_if_outdated()
@@ -74,7 +91,20 @@ def _resolve_service(client: httpx.Client, ref: str) -> dict:
 # --- daemon lifecycle -------------------------------------------------------
 
 
-@app.command()
+def _stop_daemon() -> int | None:
+    """SIGTERM the daemon via its PID file. Returns the pid, or None if not running."""
+    if not config.PID_FILE.exists():
+        return None
+    pid = int(config.PID_FILE.read_text().strip())
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pid = None
+    config.PID_FILE.unlink(missing_ok=True)
+    return pid
+
+
+@app.command(hidden=True)
 def serve(
     host: str = config.DEFAULT_HOST,
     port: int = config.DEFAULT_PORT,
@@ -87,8 +117,16 @@ def serve(
 
 
 @app.command()
-def up(open_ui: bool = typer.Option(True, "--open/--no-open", help="Open the UI in a browser.")) -> None:
+def up(
+    open_ui: bool = typer.Option(True, "--open/--no-open", help="Open the UI in a browser."),
+    restart: bool = typer.Option(False, "--restart", help="Restart the daemon if it is already running."),
+) -> None:
     """Start the daemon (detached) and open the dashboard."""
+    if restart and _daemon_running():
+        _stop_daemon()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and _daemon_running():
+            time.sleep(0.25)
     if _daemon_running():
         console.print("[green]portman is already running.[/]")
     else:
@@ -116,16 +154,11 @@ def up(open_ui: bool = typer.Option(True, "--open/--no-open", help="Open the UI 
 @app.command()
 def down() -> None:
     """Stop the daemon. (Supervised services keep running — they are detached.)"""
-    if not config.PID_FILE.exists():
-        console.print("[yellow]No PID file; daemon may not be running.[/]")
-        raise typer.Exit(code=0)
-    pid = int(config.PID_FILE.read_text().strip())
-    try:
-        os.kill(pid, signal.SIGTERM)
-        console.print(f"[green]Stopped daemon[/] (pid {pid}).")
-    except ProcessLookupError:
+    pid = _stop_daemon()
+    if pid is None:
         console.print("[yellow]Daemon was not running.[/]")
-    config.PID_FILE.unlink(missing_ok=True)
+    else:
+        console.print(f"[green]Stopped daemon[/] (pid {pid}).")
 
 
 @app.command()
@@ -193,6 +226,65 @@ def services() -> None:
     console.print(table)
 
 
+@app.command()
+def logs(
+    service: str = typer.Argument(..., help="Service id, slug, or name."),
+    tail: int = typer.Option(200, "--tail", "-n", help="Number of trailing lines to show."),
+    run: int = typer.Option(None, "--run", help="Specific run id (default: the latest run)."),
+) -> None:
+    """Show captured logs for a service's most recent run."""
+    _require_daemon()
+    with _client() as client:
+        svc = _resolve_service(client, service)
+        run_id = run
+        if run_id is None:
+            runs = client.get(f"/api/services/{svc['id']}/runs").json()
+            if not runs:
+                console.print(f"[yellow]No runs recorded for '{svc['name']}'.[/]")
+                raise typer.Exit(code=0)
+            run_id = runs[0]["id"]
+        data = client.get(f"/api/runs/{run_id}/log", params={"tail": tail}).json()
+    for line in data["lines"]:
+        console.print(line, highlight=False, markup=False)
+
+
+@app.command()
+def reservations() -> None:
+    """List active port reservations."""
+    _require_daemon()
+    with _client() as client:
+        rows = client.get("/api/reservations").json()
+    table = Table(title="Reservations", header_style="bold")
+    for col in ("ID", "Port", "Purpose", "Status", "Reserved"):
+        table.add_column(col, overflow="fold")
+    for res in rows:
+        table.add_row(
+            str(res["id"]),
+            str(res["port"]),
+            res.get("purpose") or "-",
+            res.get("status") or "-",
+            res.get("reserved_at") or "-",
+        )
+    console.print(table)
+
+
+@app.command()
+def audit(limit: int = typer.Option(50, "--limit", "-n", help="Show the most recent N events.")) -> None:
+    """Show the audit log (most recent events first)."""
+    _require_daemon()
+    with _client() as client:
+        rows = client.get("/api/audit", params={"limit": limit}).json()
+    table = Table(title="Audit", header_style="bold")
+    for col in ("Time", "Type", "Detail"):
+        table.add_column(col, overflow="fold")
+    for event in rows:
+        detail = event.get("detail")
+        if isinstance(detail, (dict, list)):
+            detail = json.dumps(detail, separators=(",", ":"))
+        table.add_row(event.get("ts") or "-", event.get("type") or "-", str(detail) if detail else "-")
+    console.print(table)
+
+
 # --- mutations --------------------------------------------------------------
 
 
@@ -203,7 +295,7 @@ def register(
     description: str = typer.Option("", "--desc", "-d"),
     cwd: str = typer.Option("", "--cwd"),
     port: int = typer.Option(None, "--port", "-p"),
-    auto_port: bool = typer.Option(False, "--auto-port", help="Assign a random free port."),
+    auto_port: bool = typer.Option(False, "--auto-port", "--auto", help="Assign a random free port."),
 ) -> None:
     """Register (authorize) a new service."""
     _require_daemon()
@@ -351,28 +443,63 @@ def _merge(*groups: list[detect.DetectedService]) -> list[detect.DetectedService
     return merged
 
 
+_SERVICE_ARG = typer.Argument(..., help="Service id, slug, or name.")
+
+
 @app.command()
-def start(service: str) -> None:
+def start(service: str = _SERVICE_ARG) -> None:
     """Start a service."""
     _lifecycle(service, "start")
 
 
 @app.command()
-def stop(service: str) -> None:
+def stop(service: str = _SERVICE_ARG) -> None:
     """Stop a service (SIGTERM)."""
     _lifecycle(service, "stop")
 
 
 @app.command()
-def restart(service: str) -> None:
+def restart(service: str = _SERVICE_ARG) -> None:
     """Restart a service."""
     _lifecycle(service, "restart")
 
 
 @app.command()
-def kill(service: str) -> None:
+def kill(service: str = _SERVICE_ARG) -> None:
     """Kill a service (SIGKILL)."""
     _lifecycle(service, "kill")
+
+
+@app.command()
+def unregister(
+    service: str = _SERVICE_ARG,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Remove (deauthorize) a registered service."""
+    _require_daemon()
+    with _client() as client:
+        svc = _resolve_service(client, service)
+        if not yes and sys.stdin.isatty() and not typer.confirm(f"Remove service '{svc['name']}'?"):
+            raise typer.Exit(code=0)
+        resp = client.delete(f"/api/services/{svc['id']}")
+    _print_response(resp, f"Removed '{svc['name']}'")
+
+
+# Familiar alias for `unregister` (PM2/docker users reach for `rm`).
+app.command(name="rm", hidden=True)(unregister)
+
+
+@app.command()
+def release(port: int = typer.Argument(..., help="The reserved port to release.")) -> None:
+    """Release a port reservation."""
+    _require_daemon()
+    with _client() as client:
+        match = next((r for r in client.get("/api/reservations").json() if r["port"] == port), None)
+        if match is None:
+            console.print(f"[red]No reservation for port {port}.[/]")
+            raise typer.Exit(code=1)
+        resp = client.delete(f"/api/reservations/{match['id']}")
+    _print_response(resp, f"Released port {port}")
 
 
 @app.command(name="kill-port")

@@ -126,21 +126,28 @@ python -m twine upload dist/*                 # publish to PyPI
 ## Usage
 
 ```bash
+portman --version          # print the version and exit (also `-v`)
 portman up                 # start the daemon (detached) and open the dashboard
+portman up --restart       # restart the daemon if it is already running
 portman ls                 # live port map, classified
 portman services           # registered services
 
 # Authorize and run a service
-portman register -n web -c "npm run dev -- --port \$PORT" --cwd ~/dev/site --auto-port
+portman register -n web -c "npm run dev -- --port \$PORT" --cwd ~/dev/site --auto
 portman start web
 portman restart web
 portman stop web
 portman kill web
+portman logs web           # tail the service's most recent run (--tail N, --run ID)
+portman unregister web     # deauthorize a service (alias: `rm`)
 
 # Ports
 portman new                # a random free port
 portman reserve 8080 --for "future websocket gateway"
+portman reservations       # list active reservations
+portman release 8080       # free a reservation
 portman kill-port 3000     # kill whatever is on a port (managed or not)
+portman audit              # recent audit-log events
 
 # Project manifests
 portman init               # scan the project → write a ./portman.yaml (no daemon needed)
