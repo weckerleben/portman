@@ -54,6 +54,16 @@ artifacts = ["portman/web/**"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Pin the async fixture loop scope so pytest-asyncio stops warning about the
+# upcoming default change.
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # starlette 1.x deprecates httpx inside its TestClient in favour of httpx2,
+    # which is not a stable, generally-available dependency yet. We use httpx
+    # directly elsewhere; this is a third-party, test-only deprecation we can't
+    # action until httpx2 ships, so silence just this one.
+    "ignore:Using `httpx` with `starlette.testclient`",
+]
 
 [tool.coverage.run]
 source = ["portman"]

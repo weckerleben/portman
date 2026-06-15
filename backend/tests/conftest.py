@@ -14,3 +14,4 @@ def temp_db(tmp_path, monkeypatch):
     config.refresh_from_env()
     db.init_db()
     yield
+    db.dispose()
