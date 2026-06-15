@@ -22,10 +22,18 @@ from rich.table import Table
 
 from . import ai as ai_mod
 from . import config, credentials, detect
+from . import update as update_mod
 from .manifest import MANIFEST_NAME
 
 app = typer.Typer(help="Local port & service manager.", no_args_is_help=True)
 console = Console()
+
+
+@app.callback()
+def _main() -> None:
+    """Local port & service manager."""
+    # Best-effort, cache-gated, fail-silent "new version available" nudge.
+    update_mod.notify_if_outdated()
 
 STATUS_STYLE = {
     "managed": "bold green",
@@ -297,6 +305,24 @@ def logout() -> None:
     """Remove the stored Anthropic API key."""
     credentials.clear_api_key()
     console.print("[green]Stored API key removed.[/]")
+
+
+@app.command()
+def upgrade() -> None:
+    """Upgrade portman to the latest published version."""
+    latest = update_mod.check_for_update()
+    current = update_mod.installed_version()
+    if latest is None:
+        console.print(f"[green]portman is up to date[/] ({current}).")
+        return
+    cmd = update_mod.detect_upgrade_command()
+    console.print(f"[bold]Upgrading[/] {current} → {latest}: {' '.join(cmd)}")
+    try:
+        code = subprocess.call(cmd)
+    except FileNotFoundError:
+        console.print(f"[red]{cmd[0]} not found.[/] Upgrade manually with your installer.")
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=code)
 
 
 def _enrich(root: Path, existing: list[detect.DetectedService]) -> list[detect.DetectedService]:
