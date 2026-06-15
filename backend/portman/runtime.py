@@ -195,6 +195,8 @@ def start_service(session: Session, service_id: int) -> Run:
     env = dict(svc.env or {})
     if svc.assigned_port:
         env.setdefault("PORT", str(svc.assigned_port))
+    # Encourage line-buffered output so live log tailing is responsive.
+    env.setdefault("PYTHONUNBUFFERED", "1")
     spec = LaunchSpec(
         key=svc.id, run_id=run.id, slug=svc.slug, command=svc.command, cwd=svc.cwd, env=env
     )
