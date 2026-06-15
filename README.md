@@ -72,19 +72,55 @@ holds it. Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Install
 
+portman is a Python CLI with the web UI bundled inside the package, so a single
+install gives you the `portman` command in every terminal and serves the
+dashboard with no extra build step.
+
+> The PyPI distribution is named **`port-man`** (the bare `portman` belongs to an
+> unrelated project). The terminal command is still `portman`.
+
+```bash
+# Recommended — isolated, on PATH, upgradable (pick one):
+uv tool install port-man       # https://docs.astral.sh/uv/
+pipx install port-man          # https://pipx.pypa.io/
+
+# With AI-assisted `portman init` (optional extra):
+uv tool install "port-man[ai]"
+
+portman up                     # start the daemon and open the dashboard
+```
+
+Upgrade with `uv tool upgrade port-man` / `pipx upgrade port-man` (or `portman
+upgrade`); remove with the matching `uninstall`. Plain `pip install port-man`
+works too, but `uv`/`pipx` keep the tool isolated from your other Python
+environments.
+
+### From source (development)
+
 ```bash
 git clone https://github.com/weckerleben/portman.git
 cd portman
 
-# 1. Backend (creates the `portman` command)
+# 1. Backend (creates the `portman` command in the venv)
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# 2. Web UI (build once; the daemon serves it)
+# 2. Web UI (built once; the daemon serves it from frontend/dist in dev)
 cd ../frontend
 npm install
 npm run build
+```
+
+### Build & publish (maintainer)
+
+The wheel bundles the built SPA automatically (a hatch build hook copies
+`frontend/dist` into `portman/web`):
+
+```bash
+cd frontend && npm install && npm run build   # produce frontend/dist
+cd ../backend && python -m build              # sdist + wheel, SPA bundled in
+python -m twine upload dist/*                 # publish to PyPI
 ```
 
 ## Usage
@@ -116,6 +152,7 @@ portman import             # register services from ./portman.yaml
 portman login              # store an Anthropic API key in ~/.portman (chmod 600)
 portman logout             # remove it
 
+portman upgrade            # update portman to the latest published version
 portman down               # stop the daemon (supervised services keep running)
 ```
 
