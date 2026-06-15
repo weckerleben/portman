@@ -151,13 +151,13 @@ def test_notify_never_raises(monkeypatch):
 
 
 def test_detect_upgrade_command_pipx():
-    exe = "/Users/me/.local/pipx/venvs/port-man/bin/python"
-    assert update.detect_upgrade_command(exe) == ["pipx", "upgrade", "port-man"]
+    exe = "/Users/me/.local/pipx/venvs/portreeve/bin/python"
+    assert update.detect_upgrade_command(exe) == ["pipx", "upgrade", "portreeve"]
 
 
 def test_detect_upgrade_command_uv():
-    exe = "/Users/me/.local/share/uv/tools/port-man/bin/python"
-    assert update.detect_upgrade_command(exe) == ["uv", "tool", "upgrade", "port-man"]
+    exe = "/Users/me/.local/share/uv/tools/portreeve/bin/python"
+    assert update.detect_upgrade_command(exe) == ["uv", "tool", "upgrade", "portreeve"]
 
 
 def test_detect_upgrade_command_falls_back_to_pip():
@@ -168,5 +168,5 @@ def test_detect_upgrade_command_falls_back_to_pip():
         "pip",
         "install",
         "--upgrade",
-        "port-man",
+        "portreeve",
     ]
