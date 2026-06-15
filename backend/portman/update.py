@@ -29,7 +29,7 @@ from . import config
 
 # The PyPI distribution name (the bare `portman` is taken by an unrelated
 # project). The terminal command and the import package both stay `portman`.
-_DIST_NAME = "port-man"
+_DIST_NAME = "portreeve"
 _PYPI_URL = f"https://pypi.org/pypi/{_DIST_NAME}/json"
 _CACHE_NAME = "update_check.json"
 _DEFAULT_TTL_HOURS = 24.0

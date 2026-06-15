@@ -76,22 +76,22 @@ portman is a Python CLI with the web UI bundled inside the package, so a single
 install gives you the `portman` command in every terminal and serves the
 dashboard with no extra build step.
 
-> The PyPI distribution is named **`port-man`** (the bare `portman` belongs to an
+> The PyPI distribution is named **`portreeve`** (the bare `portman` belongs to an
 > unrelated project). The terminal command is still `portman`.
 
 ```bash
 # Recommended — isolated, on PATH, upgradable (pick one):
-uv tool install port-man       # https://docs.astral.sh/uv/
-pipx install port-man          # https://pipx.pypa.io/
+uv tool install portreeve       # https://docs.astral.sh/uv/
+pipx install portreeve          # https://pipx.pypa.io/
 
 # With AI-assisted `portman init` (optional extra):
-uv tool install "port-man[ai]"
+uv tool install "portreeve[ai]"
 
 portman up                     # start the daemon and open the dashboard
 ```
 
-Upgrade with `uv tool upgrade port-man` / `pipx upgrade port-man` (or `portman
-upgrade`); remove with the matching `uninstall`. Plain `pip install port-man`
+Upgrade with `uv tool upgrade portreeve` / `pipx upgrade portreeve` (or `portman
+upgrade`); remove with the matching `uninstall`. Plain `pip install portreeve`
 works too, but `uv`/`pipx` keep the tool isolated from your other Python
 environments.
 

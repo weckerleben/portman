@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "port-man"
+name = "portreeve"
 version = "0.2.0"
 description = "Local port & service manager: authorize, reserve, supervise and monitor every port on your machine."
 requires-python = ">=3.11"

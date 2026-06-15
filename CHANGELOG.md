@@ -21,7 +21,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   takes precedence. `init --ai` prompts for and saves the key when missing
   (`credentials.py`). Note: there is no "log in with your Claude account" — that
   OAuth is first-party to Anthropic's apps; an API key is the supported path.
-- Optional `ai` extra (`pip install "port-man[ai]"`) pulling in the `anthropic`
+- Optional `ai` extra (`pip install "portreeve[ai]"`) pulling in the `anthropic`
   SDK, imported lazily so core portman never requires it.
 - **Update notifier + `portman upgrade`** — the CLI checks PyPI for a newer
   release at most once a day (cached in `~/.portman`, fail-silent, opt out with
@@ -34,10 +34,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Self-contained packaging** — the built web UI is now bundled inside the
   package (`portman/web`) via a hatch build hook, and the daemon resolves the SPA
   from there first (falling back to `frontend/dist` in a dev checkout). This makes
-  portman installable as a normal CLI (`uv tool install port-man`, `pipx install
-  port-man`, `pip install port-man`) with the dashboard served out of the box —
+  portman installable as a normal CLI (`uv tool install portreeve`, `pipx install
+  portreeve`, `pip install portreeve`) with the dashboard served out of the box —
   no repo checkout or separate frontend build required at install time. The PyPI
-  distribution is named `port-man` (the bare `portman` is taken); the command and
+  distribution is named `portreeve` (the bare `portman` is taken); the command and
   import package remain `portman`.
 
 ## [0.1.0] - 2026-06-15
