@@ -13,13 +13,16 @@ import subprocess
 import sys
 import time
 import webbrowser
+from pathlib import Path
 
 import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import config
+from . import ai as ai_mod
+from . import config, credentials, detect
+from .manifest import MANIFEST_NAME
 
 app = typer.Typer(help="Local port & service manager.", no_args_is_help=True)
 console = Console()
@@ -240,6 +243,86 @@ def import_manifest(path: str = typer.Argument(".", help="Project dir or portman
     with _client() as client:
         resp = client.post("/api/manifest/import", json={"path": os.path.abspath(path)})
     _print_response(resp, "Imported manifest")
+
+
+@app.command()
+def init(
+    path: str = typer.Argument(".", help="Project directory to scan."),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing portman.yaml."),
+    blank: bool = typer.Option(False, "--blank", help="Write a template instead of analysing."),
+    ai: bool = typer.Option(False, "--ai", help="Use AI to enrich the detected services."),
+) -> None:
+    """Generate a portman.yaml for a project (no daemon required).
+
+    With no flags, scans the directory and writes the services it detects. If
+    nothing is found it offers AI enrichment. ``--blank`` writes a plain
+    template; ``--ai`` forces AI enrichment.
+    """
+    root = Path(path).expanduser().resolve()
+    target = root / MANIFEST_NAME
+    if target.exists() and not force:
+        console.print(f"[yellow]{target} already exists.[/] Use [bold]--force[/] to overwrite.")
+        raise typer.Exit(code=1)
+
+    services: list[detect.DetectedService] = []
+    if not blank:
+        services = detect.detect_services(root)
+        if services:
+            console.print(f"[green]Detected {len(services)} service(s)[/] from project files.")
+        elif not ai and sys.stdin.isatty():
+            console.print("[yellow]No services detected automatically.[/]")
+            ai = typer.confirm("Try AI enrichment with an Anthropic API key?", default=False)
+        if ai:
+            services = _merge(services, _enrich(root, services))
+
+    target.write_text(detect.render_manifest(services))
+    console.print(f"[green]Wrote {target}[/] ({len(services)} service(s)). Review it, then [bold]portman import[/].")
+
+
+@app.command()
+def login(key: str = typer.Option(None, "--key", help="Anthropic API key (omit to be prompted).")) -> None:
+    """Store an Anthropic API key for the AI features (~/.portman, chmod 600).
+
+    There is no "log in with your Claude account" — that OAuth is first-party to
+    Anthropic's apps. Create an API key at https://console.anthropic.com.
+    """
+    if not key:
+        key = typer.prompt("Paste your Anthropic API key", hide_input=True)
+    path = credentials.set_api_key(key)
+    console.print(f"[green]API key saved[/] to {path}.")
+
+
+@app.command()
+def logout() -> None:
+    """Remove the stored Anthropic API key."""
+    credentials.clear_api_key()
+    console.print("[green]Stored API key removed.[/]")
+
+
+def _enrich(root: Path, existing: list[detect.DetectedService]) -> list[detect.DetectedService]:
+    key = credentials.get_api_key()
+    if not key:
+        console.print("[yellow]No Anthropic API key found.[/]")
+        key = typer.prompt("Paste your Anthropic API key", hide_input=True).strip()
+        credentials.set_api_key(key)
+        console.print("[green]Saved for next time.[/]")
+    try:
+        return ai_mod.enrich_services(root, existing, key)
+    except ai_mod.AIError as exc:
+        console.print(f"[red]AI enrichment failed:[/] {exc}")
+        return []
+
+
+def _merge(*groups: list[detect.DetectedService]) -> list[detect.DetectedService]:
+    seen: set[str] = set()
+    merged: list[detect.DetectedService] = []
+    for group in groups:
+        for svc in group:
+            if svc.name in seen:
+                continue
+            seen.add(svc.name)
+            merged.append(svc)
+    return merged
 
 
 @app.command()

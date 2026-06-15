@@ -44,7 +44,9 @@ listening socket against what it manages and flags anything else as
 - **Audit trail** — every authorize / start / stop / kill / reserve / flag event
   is persisted.
 - **Per-project manifests** — declare a project's services in `portman.yaml` and
-  `portman import` them. See [docs/PER_PROJECT.md](docs/PER_PROJECT.md).
+  `portman import` them. Generate that file in one step with `portman init`, which
+  scans the project and infers its services (with optional AI enrichment). See
+  [docs/PER_PROJECT.md](docs/PER_PROJECT.md).
 - **CLI + Web UI** — a dark control-room dashboard and a full `portman` CLI over
   the same local API.
 
@@ -105,7 +107,14 @@ portman reserve 8080 --for "future websocket gateway"
 portman kill-port 3000     # kill whatever is on a port (managed or not)
 
 # Project manifests
+portman init               # scan the project → write a ./portman.yaml (no daemon needed)
+portman init --blank       # just a template to fill in
+portman init --ai          # enrich detection with Claude (needs an API key)
 portman import             # register services from ./portman.yaml
+
+# AI key (for `init --ai`; there is no Claude-account login for third-party tools)
+portman login              # store an Anthropic API key in ~/.portman (chmod 600)
+portman logout             # remove it
 
 portman down               # stop the daemon (supervised services keep running)
 ```
