@@ -323,6 +323,19 @@ def run_log_path(session: Session, run_id: int) -> str | None:
     return run.log_path if run and run.log_path else None
 
 
+# --- manifests --------------------------------------------------------------
+
+
+def import_manifest(session: Session, path: str) -> dict:
+    """Import a project's portman.yaml (raises ServiceError on a bad manifest)."""
+    from .manifest import ManifestError, import_manifest as _import
+
+    try:
+        return _import(session, path)
+    except ManifestError as exc:
+        raise ServiceError(str(exc)) from exc
+
+
 # --- background scan loop ----------------------------------------------------
 
 

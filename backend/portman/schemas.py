@@ -20,3 +20,7 @@ class ReservationIn(BaseModel):
     port: int | None = Field(default=None, ge=1, le=65535)
     purpose: str = ""
     auto: bool = False
+
+
+class ManifestImportIn(BaseModel):
+    path: str = Field(min_length=1)

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, runtime
 from .db import session_scope
-from .schemas import ReservationIn, ServiceIn
+from .schemas import ManifestImportIn, ReservationIn, ServiceIn
 
 router = APIRouter()
 
@@ -175,6 +175,17 @@ def create_reservation(payload: ReservationIn, session: Session = Depends(get_se
 def delete_reservation(reservation_id: int, session: Session = Depends(get_session)) -> None:
     try:
         runtime.release_reservation(session, reservation_id)
+    except runtime.ServiceError as exc:
+        _raise_service_error(exc)
+
+
+# --- manifests --------------------------------------------------------------
+
+
+@router.post("/api/manifest/import")
+def import_manifest(payload: ManifestImportIn, session: Session = Depends(get_session)) -> dict:
+    try:
+        return runtime.import_manifest(session, payload.path)
     except runtime.ServiceError as exc:
         _raise_service_error(exc)
 

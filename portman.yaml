@@ -1,0 +1,25 @@
+# portman's own manifest — also a live example of the format.
+#
+# Register/update these services with:   portman import
+# (run from the repo root, or: portman import /path/to/portman)
+#
+# Fields:
+#   name         required — unique service name (re-import matches on this)
+#   command      required — shell command; $PORT is injected when a port is assigned
+#   cwd          optional — relative to this file; defaults to the manifest's directory
+#   port         a number, or "auto" to generate a free port
+#   description  optional — what the service does
+#   auto_restart optional — reserved for a future watchdog (currently informational)
+
+services:
+  - name: portman-backend
+    command: "python -m uvicorn portman.app:app --host 127.0.0.1 --port $PORT"
+    cwd: backend
+    port: 7878
+    description: "portman API daemon (serves the built SPA + REST/WS API)"
+
+  - name: portman-frontend-dev
+    command: "npm run dev -- --port $PORT"
+    cwd: frontend
+    port: 5173
+    description: "Vite dev server for the SPA (proxies /api and /ws to the daemon)"
