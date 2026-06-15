@@ -71,9 +71,47 @@ services:
 
 There is a working example at the repo root: [`../portman.yaml`](../portman.yaml).
 
+## Generating it with `portman init`
+
+You don't have to write the manifest by hand. `portman init` does it for you and
+**does not need the daemon running**:
+
+```bash
+portman init               # scan the current project, write ./portman.yaml
+portman init /path/to/proj # scan another project
+portman init --blank       # just a template to fill in (skip analysis)
+portman init --force       # overwrite an existing portman.yaml
+portman init --ai          # enrich detection with Claude (see below)
+```
+
+For an **existing project** it reads the project's own files — `package.json`
+(Vite/Next/CRA/Angular/Nuxt), `pyproject.toml`/`requirements.txt` (FastAPI/
+Flask), `manage.py` (Django), `docker-compose.yml`, `go.mod`, `Cargo.toml`,
+`Procfile` — including common `frontend/` and `backend/` subdirectories, and
+writes the detected services as ready-to-use entries with a comment explaining
+each guess. For a **new project** (nothing detected) it writes a commented
+template you can edit. Either way: review it, then `portman import`.
+
+### AI enrichment (optional)
+
+When the heuristics miss something, `init --ai` sends a snapshot of the project
+to a small Claude model and merges its suggestions. If nothing is detected at
+all, `init` offers this interactively. It needs an Anthropic API key:
+
+```bash
+pip install "portman[ai]"  # installs the anthropic SDK (optional extra)
+portman login              # store the key in ~/.portman/credentials.json (chmod 600)
+# or export ANTHROPIC_API_KEY=...   (takes precedence over the stored key)
+```
+
+There is no "log in with your Claude account" — that OAuth is first-party to
+Anthropic's own apps and isn't available to third-party tools. Create a key at
+[console.anthropic.com](https://console.anthropic.com). If you run `init --ai`
+without a key, it prompts for one and saves it for next time.
+
 ## Recommended workflow per project
 
-1. Add a `portman.yaml` describing its services (commit it).
+1. `portman init` to generate `portman.yaml`, then review/commit it.
 2. `portman import` once (or after edits).
 3. Start everything from the dashboard or `portman start <name>`.
 4. Anything that appears **unauthorized** in the dashboard is something launched

@@ -20,6 +20,9 @@ frontend/dist/
 *.local
 .vite/
 
+# SPA bundled into the package at build time (generated from frontend/dist)
+backend/portman/web/
+
 # portman runtime data (lives in ~/.portman, never committed)
 .portman/
 *.db

@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "portman"
-version = "0.1.0"
+name = "port-man"
+version = "0.2.0"
 description = "Local port & service manager: authorize, reserve, supervise and monitor every port on your machine."
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -22,6 +22,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ai = [
+    "anthropic>=0.40",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -31,8 +34,22 @@ dev = [
 [project.scripts]
 portman = "portman.cli:app"
 
+[tool.hatch.build]
+# Bundle the built SPA (frontend/dist -> portman/web) into every artifact.
+artifacts = ["portman/web/**"]
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["portman"]
+artifacts = ["portman/web/**"]
+
+[tool.hatch.build.targets.sdist]
+# The pre-built SPA (portman/web) is bundled by the build hook and shipped here,
+# so installs from an sdist serve the UI without needing Node.
+include = ["portman", "hatch_build.py"]
+artifacts = ["portman/web/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

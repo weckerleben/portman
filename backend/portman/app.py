@@ -13,8 +13,24 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__, db, runtime
 from .api import router
 
-# frontend/dist relative to the repo root (backend/portman/app.py -> ../../frontend/dist)
-SPA_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+def resolve_spa_dir(package_dir: Path, repo_root: Path) -> Path | None:
+    """Locate the built SPA, preferring the copy bundled inside the package.
+
+    Installed builds (pip/pipx/uv/brew) carry the SPA at ``portman/web``; a dev
+    checkout serves it straight from ``frontend/dist``. Returns None if neither
+    exists, in which case only the API is served.
+    """
+    packaged = package_dir / "web"
+    if packaged.is_dir():
+        return packaged
+    repo_dist = repo_root / "frontend" / "dist"
+    if repo_dist.is_dir():
+        return repo_dist
+    return None
+
+
+# Packaged location first (portman/web), else the repo's frontend/dist for dev.
+SPA_DIR = resolve_spa_dir(Path(__file__).resolve().parent, Path(__file__).resolve().parents[2])
 
 
 @asynccontextmanager
@@ -38,7 +54,7 @@ def create_app() -> FastAPI:
 
     # Serve the built SPA last so explicit /api and /ws routes win. html=True
     # makes client-side routes fall back to index.html.
-    if SPA_DIR.exists():
+    if SPA_DIR is not None:
         app.mount("/", StaticFiles(directory=str(SPA_DIR), html=True), name="spa")
 
     return app
