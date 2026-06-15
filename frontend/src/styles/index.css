@@ -1,0 +1,37 @@
+@import "./tokens.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-900 text-haze-200 font-sans antialiased;
+    /* Layered atmosphere: a cool spotlight plus a faint grid — control-room feel. */
+    background-image:
+      radial-gradient(120% 80% at 80% -10%, rgb(13 148 136 / 0.14), transparent 55%),
+      radial-gradient(90% 70% at 0% 0%, rgb(94 234 212 / 0.06), transparent 50%),
+      linear-gradient(rgb(255 255 255 / 0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(255 255 255 / 0.02) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    @apply bg-accent/30 text-haze-200;
+  }
+}
+
+@layer utilities {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  .panel-surface {
+    @apply rounded-2xl border border-white/5 bg-ink-800/70 shadow-panel backdrop-blur-sm;
+  }
+}
