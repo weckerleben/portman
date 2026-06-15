@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-15
+
+### Added
+- **`portman --version` / `-v`** — print the version and exit.
+- **`portman logs <service>`** — tail a service's most recent run (`--tail N`,
+  `--run ID`); previously logs were reachable only from the web UI.
+- **`portman unregister <service>`** (alias **`rm`**) — deauthorize a registered
+  service from the CLI (`DELETE /api/services` had no CLI caller before).
+- **`portman reservations`** and **`portman release <port>`** — list and free
+  port reservations from the terminal.
+- **`portman audit`** — view recent audit-log events.
+- **`portman up --restart`** — restart the daemon when it is already running.
+
+### Changed
+- `portman register` accepts `--auto` as an alias of `--auto-port`, consistent
+  with `reserve --auto`.
+- Service-lifecycle commands now document their `service` argument in `--help`;
+  the internal `serve` command is hidden from the command list.
+- `__version__` is derived from installed distribution metadata (single source
+  of truth), fixing drift from a stale hardcoded value.
+
+### Fixed
+- Eliminated all build and test warnings: GitHub Actions bumped to the node24
+  runtimes (`checkout@v5`, `setup-python@v6`, `setup-node@v5`, Node 22),
+  `asyncio_default_fixture_loop_scope` pinned, and the SQLAlchemy engine is now
+  disposed on re-init to stop a `ResourceWarning` connection leak. The one
+  remaining third-party deprecation (starlette's `TestClient` httpx notice) is
+  filtered until `httpx2` is generally available.
+
 ## [0.2.0] - 2026-06-15
 
 ### Added
@@ -69,5 +98,6 @@ Initial release.
   idempotently (`portman import`).
 - Documentation: README, architecture, per-project setup, and security model.
 
+[0.3.0]: https://github.com/weckerleben/portman/releases/tag/v0.3.0
 [0.2.0]: https://github.com/weckerleben/portman/releases/tag/v0.2.0
 [0.1.0]: https://github.com/weckerleben/portman/releases/tag/v0.1.0
