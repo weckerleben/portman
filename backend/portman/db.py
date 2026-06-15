@@ -23,11 +23,24 @@ _SessionLocal: sessionmaker[Session] | None = None
 
 def _build(url: str | None) -> None:
     global _engine, _SessionLocal
+    # Dispose any prior engine so re-initialising (e.g. tests repointing
+    # PORTMAN_HOME) doesn't leak its pooled SQLite connections.
+    if _engine is not None:
+        _engine.dispose()
     config.refresh_from_env()
     config.ensure_dirs()
     db_url = url or f"sqlite:///{config.DB_PATH}"
     _engine = create_engine(db_url, connect_args={"check_same_thread": False})
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+
+
+def dispose() -> None:
+    """Close all pooled connections and drop the engine. Safe to call anytime."""
+    global _engine, _SessionLocal
+    if _engine is not None:
+        _engine.dispose()
+    _engine = None
+    _SessionLocal = None
 
 
 def get_engine() -> Engine:
