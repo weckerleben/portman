@@ -67,3 +67,8 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["portman"]
+
+[tool.coverage.report]
+# Lock in full coverage: a drop fails the CI `pytest --cov` run.
+fail_under = 100
+show_missing = true
