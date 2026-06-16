@@ -157,3 +157,89 @@ def test_render_blank_template_is_valid_yaml(tmp_path):
     text = detect.render_manifest([])
     data = yaml.safe_load(text)
     assert "services" in data
+
+
+# --- assign_ports -----------------------------------------------------------
+
+
+def test_assign_ports_replaces_defaults_and_clears_auto():
+    services = [
+        detect.DetectedService(name="web", command="x", port=3000),
+        detect.DetectedService(name="api", command="y", auto_port=True),
+    ]
+    pool = iter([41000, 41001])
+    out = detect.assign_ports(services, find_port=lambda exclude: next(pool))
+    assert [s.port for s in out] == [41000, 41001]
+    assert all(s.auto_port is False for s in out)
+
+
+def test_python_project_without_known_framework_is_ignored(tmp_path):
+    _write(tmp_path, "pyproject.toml", '[project]\ndependencies = ["click"]\n')
+    assert detect.detect_services(tmp_path) == []
+
+
+def test_compose_skips_non_mapping_service(tmp_path):
+    _write(tmp_path, "docker-compose.yml", "services:\n  weird: just-a-string\n")
+    assert detect.detect_services(tmp_path) == []
+
+
+def test_procfile_skips_malformed_lines(tmp_path):
+    _write(tmp_path, "Procfile", "web:\n: nocommand\nworker: celery -A app worker\n")
+    names = [s.name for s in detect.detect_services(tmp_path)]
+    assert names == ["worker"]  # "web:" (empty cmd) and ": nocommand" (empty name) dropped
+
+
+def test_node_ignores_invalid_json(tmp_path):
+    _write(tmp_path, "package.json", "{not valid json")
+    assert detect.detect_services(tmp_path) == []
+
+
+def test_node_ignores_when_no_runnable_script(tmp_path):
+    _write(tmp_path, "package.json", json.dumps({"scripts": {"build": "tsc"}}))
+    assert detect.detect_services(tmp_path) == []
+
+
+def test_compose_invalid_yaml_yields_nothing(tmp_path):
+    _write(tmp_path, "docker-compose.yml", "services: [unclosed")
+    assert detect.detect_services(tmp_path) == []
+
+
+def test_compose_falls_back_to_auto_when_ports_unparseable(tmp_path):
+    _write(
+        tmp_path,
+        "compose.yaml",
+        "services:\n  a:\n    image: x\n    ports:\n"
+        "      - published: null\n        target: 80\n"
+        '      - "notaport"\n',
+    )
+    svc = detect.detect_services(tmp_path)[0]
+    assert svc.auto_port is True  # no usable host port → auto
+
+
+def test_rust_only_project_is_detected(tmp_path):
+    _write(tmp_path, "Cargo.toml", "[package]\nname = \"app\"\n")
+    svc = detect.detect_services(tmp_path)[0]
+    assert svc.command == "cargo run" and svc.auto_port is True
+
+
+def test_render_includes_auto_restart(tmp_path):
+    services = [detect.DetectedService(name="w", command="x", port=4000, auto_restart=True)]
+    assert "auto_restart: true" in detect.render_manifest(services)
+
+
+def test_assign_ports_reuses_existing_and_excludes_them():
+    services = [
+        detect.DetectedService(name="web", command="x", port=3000),
+        detect.DetectedService(name="api", command="y", port=8000),
+    ]
+    seen_excludes: list[set[int]] = []
+
+    def find(exclude):
+        seen_excludes.append(set(exclude))
+        return 42000
+
+    out = detect.assign_ports(services, find_port=find, reuse={"web": 5173})
+    assert out[0].port == 5173  # reused, not regenerated
+    assert out[1].port == 42000
+    # The reused port is excluded when picking a port for the next service.
+    assert 5173 in seen_excludes[0]

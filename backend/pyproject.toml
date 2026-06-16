@@ -67,4 +67,3 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["portman"]
-omit = ["portman/cli.py", "portman/app.py"]

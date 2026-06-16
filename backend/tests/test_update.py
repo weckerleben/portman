@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from importlib.metadata import PackageNotFoundError
 
 import pytest
 
@@ -87,6 +88,18 @@ def test_check_refetches_when_cache_is_stale(portman_home, monkeypatch):
     assert update.check_for_update(now=later) == "2.0.0"
 
 
+def test_check_with_zero_ttl_refetches_despite_fresh_cache(portman_home, monkeypatch):
+    # A fresh cache (checked just now) would normally be reused…
+    (portman_home / "update_check.json").write_text(
+        json.dumps({"latest": "0.1.0", "checked_at": 1000.0})
+    )
+    monkeypatch.setattr(update, "installed_version", lambda: "0.1.0")
+    monkeypatch.setattr(update, "_fetch_latest_version", lambda timeout=1.0: "2.0.0")
+
+    # …but ttl_hours=0 forces a remote check (this is what `portman upgrade` uses).
+    assert update.check_for_update(ttl_hours=0, now=1000.0) == "2.0.0"
+
+
 def test_check_is_silent_on_network_failure(portman_home, monkeypatch):
     monkeypatch.setattr(update, "installed_version", lambda: "0.1.0")
     monkeypatch.setattr(update, "_fetch_latest_version", lambda timeout=1.0: None)
@@ -140,11 +153,57 @@ def test_notify_respects_opt_out_env(monkeypatch):
 
 
 def test_notify_never_raises(monkeypatch):
+    monkeypatch.delenv("PORTMAN_NO_UPDATE_CHECK", raising=False)
+
     def _boom():
         raise RuntimeError("boom")
 
     monkeypatch.setattr(update, "check_for_update", _boom)
     update.notify_if_outdated(stream=io.StringIO())  # must not raise
+
+
+# --- network + cache internals ----------------------------------------------
+
+
+def test_installed_version_none_when_not_installed(monkeypatch):
+    def _missing(_name):
+        raise PackageNotFoundError
+
+    monkeypatch.setattr(update, "version", _missing)
+    assert update.installed_version() is None
+
+
+def test_fetch_latest_parses_pypi_payload(monkeypatch):
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"info": {"version": "3.2.1"}}
+
+    monkeypatch.setattr(update.httpx, "get", lambda url, timeout: FakeResp())
+    assert update._fetch_latest_version() == "3.2.1"
+
+
+def test_fetch_latest_silent_on_http_error(monkeypatch):
+    def _boom(url, timeout):
+        raise update.httpx.HTTPError("down")
+
+    monkeypatch.setattr(update.httpx, "get", _boom)
+    assert update._fetch_latest_version() is None
+
+
+def test_read_cache_returns_none_on_corrupt_file(portman_home):
+    config.ensure_dirs()
+    (config.DATA_DIR / "update_check.json").write_text("{not json")
+    assert update._read_cache() is None
+
+
+def test_write_cache_is_silent_on_oserror(portman_home):
+    config.ensure_dirs()
+    # A directory where the cache file should be makes write_text raise OSError.
+    (config.DATA_DIR / "update_check.json").mkdir()
+    update._write_cache("1.0.0", 1234.0)  # must not raise
 
 
 # --- detect_upgrade_command -------------------------------------------------
