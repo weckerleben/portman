@@ -1,7 +1,10 @@
 # Architecture
 
 portman is a single local daemon (FastAPI) plus a React SPA and a CLI, all
-talking to the same HTTP/WebSocket API on `127.0.0.1:7878`.
+talking to the same HTTP/WebSocket API on `127.0.0.1`. The daemon binds a
+random port chosen on first use and persisted to `~/.portman/daemon.port`, so a
+fresh install never collides with a well-known port; override it with
+`PORTMAN_PORT` or manage it via `portman daemon-port`.
 
 ## Layers
 

@@ -24,7 +24,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import audit, ports
+from . import audit
 from .models import AuditType, Service
 
 MANIFEST_NAME = "portman.yaml"
@@ -103,16 +103,28 @@ def import_manifest(session: Session, path: str) -> dict:
     Matching is by service name: an existing service with the same name is
     updated in place (so re-importing after an edit is idempotent).
     """
-    from .runtime import unique_slug, used_ports  # local import to avoid a cycle
+    from .runtime import (  # local import to avoid a cycle
+        adopt_init_reservations,
+        claim_port,
+        unique_slug,
+    )
 
     services, manifest_path = parse(path)
-    created, updated = [], []
+    created, updated, reassigned = [], [], []
 
     for ms in services:
         existing = session.scalars(select(Service).where(Service.name == ms.name)).first()
-        port = ms.port
-        if port is None and ms.auto_port:
-            port = ports.find_free_port(exclude=used_ports(session))
+        port, reassigned_from = claim_port(
+            session,
+            desired=ms.port,
+            auto=ms.auto_port,
+            owner_name=ms.name,
+            owner_service_id=existing.id if existing else None,
+        )
+        if reassigned_from is not None:
+            reassigned.append(
+                {"service": ms.name, "requested": reassigned_from, "assigned": port}
+            )
 
         if existing is None:
             svc = Service(
@@ -139,11 +151,20 @@ def import_manifest(session: Session, path: str) -> dict:
             existing.manifest_path = str(manifest_path)
             updated.append(ms.name)
 
+        # The service now owns its port; drop any init-time placeholder reservation.
+        adopt_init_reservations(session, ms.name)
+
     audit.record(
         session,
         AuditType.authorize.value,
         manifest=str(manifest_path),
         created=created,
         updated=updated,
+        reassigned=reassigned,
     )
-    return {"manifest": str(manifest_path), "created": created, "updated": updated}
+    return {
+        "manifest": str(manifest_path),
+        "created": created,
+        "updated": updated,
+        "reassigned": reassigned,
+    }

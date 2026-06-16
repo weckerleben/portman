@@ -100,6 +100,8 @@ def _write_cache(latest: str, checked_at: float) -> None:
 
 
 def _cached_latest(now: float, ttl_hours: float) -> str | None:
+    if ttl_hours <= 0:
+        return None  # force a fresh check, regardless of when the cache was written
     data = _read_cache()
     if not data:
         return None

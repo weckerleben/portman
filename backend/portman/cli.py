@@ -23,9 +23,9 @@ from rich.table import Table
 
 from . import __version__
 from . import ai as ai_mod
-from . import config, credentials, detect
+from . import config, credentials, detect, ports
 from . import update as update_mod
-from .manifest import MANIFEST_NAME
+from .manifest import MANIFEST_NAME, ManifestError, parse as parse_manifest
 
 app = typer.Typer(help="Local port & service manager.", no_args_is_help=True)
 console = Console()
@@ -60,7 +60,7 @@ STATUS_STYLE = {
 
 
 def _url(path: str = "") -> str:
-    return f"http://{config.DEFAULT_HOST}:{config.DEFAULT_PORT}{path}"
+    return f"http://{config.DEFAULT_HOST}:{config.daemon_port()}{path}"
 
 
 def _client() -> httpx.Client:
@@ -107,13 +107,13 @@ def _stop_daemon() -> int | None:
 @app.command(hidden=True)
 def serve(
     host: str = config.DEFAULT_HOST,
-    port: int = config.DEFAULT_PORT,
+    port: int = typer.Option(None, "--port", help="Defaults to the persisted daemon port."),
 ) -> None:
     """Run the daemon in the foreground (used internally by ``up``)."""
     import uvicorn
 
     config.ensure_dirs()
-    uvicorn.run("portman.app:app", host=host, port=port, log_level="info")
+    uvicorn.run("portman.app:app", host=host, port=port or config.daemon_port(), log_level="info")
 
 
 @app.command()
@@ -131,10 +131,13 @@ def up(
         console.print("[green]portman is already running.[/]")
     else:
         config.ensure_dirs()
+        # Self-heal: if the persisted random port got taken since we picked it,
+        # regenerate one so a fresh install/relaunch never fails on a conflict.
+        port = config.ensure_free_daemon_port()
         log = open(config.DATA_DIR / "daemon.log", "ab", buffering=0)
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "portman.app:app",
-             "--host", config.DEFAULT_HOST, "--port", str(config.DEFAULT_PORT)],
+             "--host", config.DEFAULT_HOST, "--port", str(port)],
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
@@ -163,11 +166,39 @@ def down() -> None:
 
 @app.command()
 def status() -> None:
-    """Show whether the daemon is up."""
+    """Show whether the daemon is up, and on which port."""
+    port = config.daemon_port()
     if _daemon_running():
-        console.print(f"[green]running[/] at {_url()}")
+        console.print(f"[green]running[/] at {_url()} (port {port})")
     else:
-        console.print("[red]not running[/]")
+        console.print(f"[red]not running[/] (configured port {port})")
+
+
+@app.command(name="daemon-port")
+def daemon_port_cmd(
+    set_port: int = typer.Option(None, "--set", min=1, max=65535, help="Pin the daemon to this port."),
+    regenerate: bool = typer.Option(False, "--regenerate", help="Pick a new random port."),
+) -> None:
+    """Show, set, or regenerate the daemon's port.
+
+    The daemon binds a random port chosen on first use (so a fresh install never
+    collides with a well-known port). Override it permanently with ``--set`` or
+    roll a new one with ``--regenerate``. ``PORTMAN_PORT`` overrides both.
+    """
+    if set_port is not None and regenerate:
+        console.print("[red]Use either --set or --regenerate, not both.[/]")
+        raise typer.Exit(code=1)
+    if set_port is not None:
+        port = config.set_daemon_port(set_port)
+        console.print(f"[green]Daemon port set to {port}.[/]")
+    elif regenerate:
+        port = config.regenerate_daemon_port()
+        console.print(f"[green]Daemon port regenerated: {port}.[/]")
+    else:
+        console.print(str(config.daemon_port()), highlight=False)
+        return
+    if _daemon_running():
+        console.print("[yellow]Restart the daemon for this to take effect:[/] [bold]portman up --restart[/]")
 
 
 @app.command(name="open")
@@ -285,6 +316,26 @@ def audit(limit: int = typer.Option(50, "--limit", "-n", help="Show the most rec
     console.print(table)
 
 
+@app.command()
+def doctor() -> None:
+    """Report port conflicts across services, reservations and live processes."""
+    _require_daemon()
+    with _client() as client:
+        report = client.get("/api/doctor").json()
+    console.print(f"daemon port: [bold]{report['daemon_port']}[/]")
+    conflicts = report["conflicts"]
+    if not conflicts:
+        console.print("[green]No port conflicts detected.[/]")
+        return
+    table = Table(title="Conflicts", header_style="bold red")
+    for col in ("Port", "Type", "Detail"):
+        table.add_column(col, overflow="fold")
+    for c in conflicts:
+        table.add_row(str(c["port"]), c["type"], c["detail"])
+    console.print(table)
+    raise typer.Exit(code=1)
+
+
 # --- mutations --------------------------------------------------------------
 
 
@@ -342,7 +393,15 @@ def import_manifest(path: str = typer.Argument(".", help="Project dir or portman
     _require_daemon()
     with _client() as client:
         resp = client.post("/api/manifest/import", json={"path": os.path.abspath(path)})
-    _print_response(resp, "Imported manifest")
+    if not resp.is_success:
+        _print_response(resp, "Imported manifest")  # always raises on a non-2xx
+    body = resp.json()
+    console.print("[green]Imported manifest.[/]")
+    for change in body.get("reassigned", []):
+        console.print(
+            f"[yellow]Port {change['requested']} for '{change['service']}' was busy[/] — "
+            f"reassigned to [bold]{change['assigned']}[/]."
+        )
 
 
 @app.command()
@@ -374,9 +433,67 @@ def init(
             ai = typer.confirm("Try AI enrichment with an Anthropic API key?", default=False)
         if ai:
             services = _merge(services, _enrich(root, services))
+        services = _assign_init_ports(services, target)
 
     target.write_text(detect.render_manifest(services))
     console.print(f"[green]Wrote {target}[/] ({len(services)} service(s)). Review it, then [bold]portman import[/].")
+    _reserve_init_ports(services)
+
+
+def _existing_ports(target: Path) -> dict[str, int]:
+    """Map service name -> port from an existing manifest, so re-init is stable."""
+    if not target.exists():
+        return {}
+    try:
+        existing, _ = parse_manifest(str(target))
+    except ManifestError:
+        return {}
+    return {s.name: s.port for s in existing if s.port is not None}
+
+
+def _assign_init_ports(
+    services: list[detect.DetectedService], target: Path
+) -> list[detect.DetectedService]:
+    """Replace framework defaults with random free ports the project can keep."""
+    if not services:
+        return services
+    taken = {lp.port for lp in ports.list_listening()}
+    if _daemon_running():
+        taken |= _daemon_used_ports()
+    find_port = lambda exclude: ports.find_free_port(exclude=exclude | taken)  # noqa: E731
+    return detect.assign_ports(services, find_port=find_port, reuse=_existing_ports(target))
+
+
+def _daemon_used_ports() -> set[int]:
+    """Ports the running daemon already knows about (reservations + assignments)."""
+    used: set[int] = set()
+    try:
+        with _client() as client:
+            used |= {r["port"] for r in client.get("/api/reservations").json()}
+            used |= {
+                s["assigned_port"]
+                for s in client.get("/api/services").json()
+                if s.get("assigned_port")
+            }
+    except httpx.HTTPError:
+        pass
+    return used
+
+
+def _reserve_init_ports(services: list[detect.DetectedService]) -> None:
+    """If the daemon is up, reserve each assigned port so nothing else grabs it."""
+    reservable = [s for s in services if s.port is not None]
+    if not reservable or not _daemon_running():
+        if reservable:
+            console.print("[dim]Start the daemon and run[/] [bold]portman import[/] [dim]to reserve these ports.[/]")
+        return
+    with _client() as client:
+        for svc in reservable:
+            client.post(
+                "/api/reservations",
+                json={"port": svc.port, "purpose": f"portman-init:{svc.name}", "auto": False},
+            )
+    console.print(f"[green]Reserved {len(reservable)} port(s)[/] for this project.")
 
 
 @app.command()
@@ -402,7 +519,9 @@ def logout() -> None:
 @app.command()
 def upgrade() -> None:
     """Upgrade portman to the latest published version."""
-    latest = update_mod.check_for_update()
+    # An explicit upgrade always checks PyPI fresh (ttl_hours=0 bypasses the
+    # 24h cache the passive notifier relies on), so it never acts on stale info.
+    latest = update_mod.check_for_update(ttl_hours=0)
     current = update_mod.installed_version()
     if latest is None:
         console.print(f"[green]portman is up to date[/] ({current}).")

@@ -150,13 +150,83 @@ def used_ports(session: Session) -> set[int]:
     return used
 
 
+def _owner_purposes(name: str) -> set[str]:
+    """Reservation purposes that count as belonging to a service named ``name``."""
+    return {name, f"portman-init:{name}", f"service:{name}"}
+
+
+def claim_port(
+    session: Session,
+    *,
+    desired: int | None,
+    auto: bool,
+    owner_name: str,
+    owner_service_id: int | None = None,
+) -> tuple[int | None, int | None]:
+    """Resolve the port a service should use, avoiding conflicts.
+
+    Returns ``(port, reassigned_from)``. A fixed ``desired`` port that is already
+    taken — listening, managed by another running service, or reserved for a
+    different purpose — is reassigned to a free port, and ``reassigned_from``
+    records the originally requested port. Ports the *owner* already holds (its
+    current assignment, or a reservation made for it by ``portman init``) never
+    count as conflicts, so re-importing is stable.
+    """
+    own: set[int] = set()
+    if owner_service_id is not None:
+        svc = session.get(Service, owner_service_id)
+        if svc and svc.assigned_port:
+            own.add(svc.assigned_port)
+
+    purposes = _owner_purposes(owner_name)
+    foreign_reserved: set[int] = set()
+    stmt = select(PortReservation).where(
+        PortReservation.status == ReservationStatus.reserved.value
+    )
+    for res in session.scalars(stmt):
+        (own if res.purpose in purposes else foreign_reserved).add(res.port)
+
+    taken = (
+        set(managed_ports(session))
+        | foreign_reserved
+        | {lp.port for lp in ports.list_listening()}
+    ) - own
+
+    reassigned_from: int | None = None
+    if desired is not None:
+        if desired in taken:
+            port = ports.find_free_port(exclude=taken)
+            reassigned_from = desired
+        else:
+            port = desired
+    elif auto:
+        port = ports.find_free_port(exclude=taken)
+    else:
+        port = None
+    return port, reassigned_from
+
+
+def adopt_init_reservations(session: Session, owner_name: str) -> None:
+    """Drop init-time reservations for a service now that it owns its port.
+
+    ``portman init`` reserves a port with purpose ``portman-init:<name>``; once
+    the service is actually registered it supersedes that placeholder, so we
+    release it to keep the reservations list honest.
+    """
+    stmt = select(PortReservation).where(
+        PortReservation.purpose == f"portman-init:{owner_name}"
+    )
+    for res in session.scalars(stmt):
+        session.delete(res)
+
+
 # --- service lifecycle ------------------------------------------------------
 
 
 def create_service(session: Session, data) -> Service:
-    port = data.port
-    if port is None and data.auto_port:
-        port = ports.find_free_port(exclude=used_ports(session))
+    port, reassigned_from = claim_port(
+        session, desired=data.port, auto=data.auto_port, owner_name=data.name
+    )
     svc = Service(
         name=data.name,
         slug=unique_slug(session, data.name),
@@ -170,8 +240,14 @@ def create_service(session: Session, data) -> Service:
     )
     session.add(svc)
     session.flush()
+    adopt_init_reservations(session, data.name)
     audit.record(
-        session, AuditType.authorize.value, service=svc.slug, port=port, command=svc.command
+        session,
+        AuditType.authorize.value,
+        service=svc.slug,
+        port=port,
+        reassigned_from=reassigned_from,
+        command=svc.command,
     )
     return svc
 
@@ -260,6 +336,18 @@ def reserve_port(session: Session, data) -> PortReservation:
         if not data.auto:
             raise ServiceError("provide a port or set auto=true")
         port = ports.find_free_port(exclude=used_ports(session))
+    # Idempotent: reserving an already-reserved port returns the existing row
+    # instead of stacking duplicates (so re-running ``portman init`` is a no-op).
+    existing = session.scalars(
+        select(PortReservation).where(
+            PortReservation.port == port,
+            PortReservation.status == ReservationStatus.reserved.value,
+        )
+    ).first()
+    if existing is not None:
+        if data.purpose and not existing.purpose:
+            existing.purpose = data.purpose
+        return existing
     res = PortReservation(
         port=port, purpose=data.purpose, status=ReservationStatus.reserved.value
     )
@@ -321,6 +409,61 @@ def ports_view(session: Session) -> dict:
 def run_log_path(session: Session, run_id: int) -> str | None:
     run = session.get(Run, run_id)
     return run.log_path if run and run.log_path else None
+
+
+# --- diagnostics -------------------------------------------------------------
+
+
+def diagnose(session: Session) -> dict:
+    """Report port conflicts portman can see across services, reservations and
+    the live system. Returns ``{"daemon_port", "conflicts": [...], "ok": bool}``.
+    """
+    services = list_services(session)
+    listening = {lp.port: lp for lp in ports.list_listening()}
+    managed = managed_ports(session)
+    conflicts: list[dict] = []
+
+    # Two services configured on the same port — only one can ever bind it.
+    by_port: dict[int, list[str]] = {}
+    for svc in services:
+        if svc.assigned_port:
+            by_port.setdefault(svc.assigned_port, []).append(svc.name)
+    for port, names in sorted(by_port.items()):
+        if len(names) > 1:
+            conflicts.append({
+                "type": "duplicate_assignment",
+                "port": port,
+                "detail": f"services {', '.join(sorted(names))} all claim port {port}",
+            })
+
+    # A service's port is held by something that isn't its own managed run.
+    for svc in services:
+        port = svc.assigned_port
+        if port and port in listening and not supervisor.is_running(svc.id):
+            lp = listening[port]
+            conflicts.append({
+                "type": "port_taken",
+                "port": port,
+                "detail": (
+                    f"port {port} for '{svc.name}' is held by "
+                    f"{lp.cmdline or lp.name or 'an unknown process'} (pid {lp.pid})"
+                ),
+            })
+
+    # A reserved port is occupied by a process that is not a managed service.
+    for res in list_reservations(session):
+        if res.port in listening and res.port not in managed:
+            lp = listening[res.port]
+            conflicts.append({
+                "type": "reservation_taken",
+                "port": res.port,
+                "detail": (
+                    f"reserved port {res.port} ({res.purpose or 'no purpose'}) is held by "
+                    f"{lp.cmdline or lp.name or 'an unknown process'} (pid {lp.pid})"
+                ),
+            })
+
+    return {"daemon_port": config.daemon_port(), "conflicts": conflicts, "ok": not conflicts}
 
 
 # --- manifests --------------------------------------------------------------
