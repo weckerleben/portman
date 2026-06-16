@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-16
+
+### Added
+- **Conflict-free daemon port** — the daemon binds a random free port chosen on
+  first use and persisted to `~/.portman/daemon.port`, so a fresh install never
+  collides with a well-known port. `PORTMAN_PORT` still overrides; `up`
+  self-heals if the saved port was taken. New **`portman daemon-port`** shows,
+  sets, or regenerates it, and `status` now reports the port.
+- **`portman doctor`** — reports port conflicts across registered services,
+  reservations and live processes.
+- Port reservations are now idempotent.
+
+### Changed
+- `portman init` assigns concrete random free ports (replacing framework
+  defaults), reuses existing ports on re-init, and reserves them when the daemon
+  is up.
+- Registering or importing a service reassigns a busy fixed port to a free one
+  and reports the change.
+- `portman upgrade` always checks PyPI fresh, bypassing the 24h cache the passive
+  update notifier relies on.
+
+### Tests
+- Test suite expanded to **100% coverage**, enforced by a CI coverage floor.
+
 ## [0.3.0] - 2026-06-15
 
 ### Added

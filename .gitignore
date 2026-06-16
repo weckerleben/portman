@@ -19,6 +19,7 @@ node_modules/
 frontend/dist/
 *.local
 .vite/
+*.tsbuildinfo
 
 # SPA bundled into the package at build time (generated from frontend/dist)
 backend/portman/web/

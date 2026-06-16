@@ -10,14 +10,15 @@ from __future__ import annotations
 import os
 import shlex
 import signal
+import subprocess
 import sys
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from portman import config, ports
-from portman.supervisor import LaunchSpec, Supervisor
+from portman.supervisor import LaunchSpec, Supervisor, _Handle
 
 
 def _sleeper(message: str = "hello") -> str:
@@ -105,3 +106,40 @@ def test_kill_port_skips_already_dead_pids(sup):
     ):
         killed = sup.kill_port(8080)
     assert killed == []  # nothing was actually signalled
+
+
+# --- edge branches ----------------------------------------------------------
+
+
+def test_start_closes_log_on_spawn_failure(sup, tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise OSError("cannot spawn")
+
+    monkeypatch.setattr("portman.supervisor.subprocess.Popen", boom)
+    with pytest.raises(OSError):
+        sup.start(_spec(tmp_path))
+
+
+def test_stop_unknown_key_returns_none(sup):
+    assert sup.stop(999) is None
+
+
+def test_stop_escalates_to_sigkill_and_tolerates_errors(sup, tmp_path, monkeypatch):
+    # A process that never reaps (wait always times out) and resists signals.
+    fake_popen = MagicMock()
+    fake_popen.pid = 4242
+    fake_popen.poll.return_value = None
+    fake_popen.wait.side_effect = subprocess.TimeoutExpired(cmd="x", timeout=5)
+    fake_log = MagicMock()
+    fake_log.close.side_effect = OSError  # _close must swallow this
+    sup._procs[1] = _Handle(fake_popen, fake_log, "p", _spec(tmp_path))
+
+    monkeypatch.setattr("portman.supervisor.os.getpgid", lambda pid: pid)
+    monkeypatch.setattr(
+        "portman.supervisor.os.killpg",
+        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError),
+    )
+
+    info = sup.stop(1, timeout=0.01)
+    assert info is not None  # info() still reports the (stuck) process
+    sup._procs.pop(1, None)  # avoid the fixture teardown re-signalling the fake

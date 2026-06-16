@@ -53,7 +53,7 @@ listening socket against what it manages and flags anything else as
 ## Architecture at a glance
 
 ```
- React + Vite SPA  ──HTTP/WS──▶  FastAPI daemon (127.0.0.1:7878)
+ React + Vite SPA  ──HTTP/WS──▶  FastAPI daemon (127.0.0.1, random port)
  (control-room UI)               ├─ ports.py      psutil introspection
                                  ├─ supervisor.py subprocess lifecycle + logs
        portman CLI ──HTTP──▶     ├─ scanner.py    reconcile → unauthorized

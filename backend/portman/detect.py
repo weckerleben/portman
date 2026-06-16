@@ -13,8 +13,9 @@ explains *why* they were detected; ``init`` renders those notes as comments.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Callable
 
 import yaml
 
@@ -63,6 +64,33 @@ def detect_services(root: Path) -> list[DetectedService]:
         seen.add(svc.name)
         unique.append(svc)
     return unique
+
+
+def assign_ports(
+    services: list[DetectedService],
+    *,
+    find_port: Callable[[set[int]], int],
+    reuse: dict[str, int] | None = None,
+) -> list[DetectedService]:
+    """Give every service a concrete, conflict-free port written into the YAML.
+
+    ``init`` replaces framework defaults (3000, 5173, …) — which collide on a
+    shared machine — with random free ports so a freshly cloned project runs
+    without stepping on anything. ``reuse`` carries forward ports already chosen
+    for same-named services (from an existing manifest) so re-running ``init`` is
+    stable. ``find_port(exclude)`` returns a free port avoiding ``exclude``.
+    """
+    reuse = reuse or {}
+    chosen: set[int] = set(reuse.values())
+    assigned: list[DetectedService] = []
+    for svc in services:
+        if svc.name in reuse:
+            port = reuse[svc.name]
+        else:
+            port = find_port(chosen)
+        chosen.add(port)
+        assigned.append(replace(svc, port=port, auto_port=False))
+    return assigned
 
 
 # --- detectors --------------------------------------------------------------

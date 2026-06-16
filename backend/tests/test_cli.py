@@ -8,6 +8,8 @@ without a real daemon, subprocess, or network.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -139,3 +141,80 @@ def test_register_accepts_auto_alias(seed):
     assert result.exit_code == 0
     names = [s["name"] for s in seed.get("/api/services").json()]
     assert "svc" in names
+
+
+# --- upgrade ----------------------------------------------------------------
+
+
+def test_upgrade_forces_a_fresh_remote_check(monkeypatch):
+    captured: dict = {}
+
+    def fake_check(**kwargs):
+        captured.update(kwargs)
+        return None  # "up to date" → no subprocess, clean exit
+
+    monkeypatch.setattr(cli.update_mod, "check_for_update", fake_check)
+    monkeypatch.setattr(cli.update_mod, "installed_version", lambda: "0.1.0")
+    monkeypatch.setattr(cli.update_mod, "notify_if_outdated", lambda: None)
+
+    result = runner.invoke(cli.app, ["upgrade"])
+    assert result.exit_code == 0
+    assert captured.get("ttl_hours") == 0  # bypasses the 24h notifier cache
+
+
+# --- doctor -----------------------------------------------------------------
+
+
+def test_doctor_reports_clean(seed):
+    _register(seed)
+    result = runner.invoke(cli.app, ["doctor"])
+    assert result.exit_code == 0
+    assert "No port conflicts" in result.stdout
+
+
+# --- daemon-port ------------------------------------------------------------
+
+
+def test_daemon_port_show(seed):
+    result = runner.invoke(cli.app, ["daemon-port"])
+    assert result.exit_code == 0
+    assert str(config.daemon_port()) in result.stdout
+
+
+def test_daemon_port_set(seed):
+    result = runner.invoke(cli.app, ["daemon-port", "--set", "45000"])
+    assert result.exit_code == 0
+    assert config.daemon_port() == 45000
+
+
+def test_daemon_port_set_and_regenerate_conflict(seed):
+    result = runner.invoke(cli.app, ["daemon-port", "--set", "45000", "--regenerate"])
+    assert result.exit_code == 1
+
+
+# --- init: random fixed ports -----------------------------------------------
+
+
+def test_init_writes_fixed_random_ports(tmp_path, monkeypatch):
+    monkeypatch.setenv("PORTMAN_HOME", str(tmp_path / "home"))
+    config.refresh_from_env()
+    monkeypatch.setattr(cli, "_daemon_running", lambda: False)
+    monkeypatch.setattr(cli.update_mod, "notify_if_outdated", lambda: None)
+    monkeypatch.setattr(ports, "list_listening", lambda: [])
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "package.json").write_text(
+        json.dumps({"scripts": {"dev": "vite"}, "devDependencies": {"vite": "^5"}})
+    )
+
+    result = runner.invoke(cli.app, ["init", str(proj)])
+    assert result.exit_code == 0, result.stdout
+    text = (proj / "portman.yaml").read_text()
+    assert "port: auto" not in text  # defaults replaced with concrete ports
+
+    from portman.manifest import parse
+
+    services, _ = parse(str(proj))
+    assert services[0].port is not None
+    assert config.PORT_RANGE_START <= services[0].port <= config.PORT_RANGE_END

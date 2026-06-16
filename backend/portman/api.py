@@ -152,6 +152,11 @@ def generate_port(session: Session = Depends(get_session)) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.get("/api/doctor")
+def doctor(session: Session = Depends(get_session)) -> dict:
+    return runtime.diagnose(session)
+
+
 # --- reservations -----------------------------------------------------------
 
 

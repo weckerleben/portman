@@ -5,9 +5,10 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from portman import db
+from portman import db, ports
 from portman.manifest import ManifestError, import_manifest, parse
-from portman.models import Service
+from portman.models import PortReservation, Service
+from portman.ports import ListeningPort
 
 MANIFEST = """
 services:
@@ -84,3 +85,50 @@ def test_import_creates_then_updates_idempotently(tmp_path, temp_db):
         assert len(services) == 2
         web = next(s for s in services if s.name == "web")
         assert web.description == "Edited"
+
+
+def test_parse_rejects_invalid_yaml(tmp_path):
+    _write(tmp_path, "foo: [unclosed")
+    with pytest.raises(ManifestError):
+        parse(str(tmp_path))
+
+
+def test_parse_rejects_non_mapping_entry(tmp_path):
+    _write(tmp_path, "services:\n  - just a string\n")
+    with pytest.raises(ManifestError):
+        parse(str(tmp_path))
+
+
+def test_import_reassigns_busy_fixed_port(tmp_path, temp_db, monkeypatch):
+    # Pretend something foreign already listens on the requested port 3000.
+    monkeypatch.setattr(
+        ports, "list_listening", lambda: [ListeningPort(port=3000, pid=999, name="other")]
+    )
+    _write(tmp_path, "services:\n  - name: web\n    command: x\n    port: 3000\n")
+
+    with db.session_scope() as session:
+        result = import_manifest(session, str(tmp_path))
+
+    assert result["reassigned"][0]["service"] == "web"
+    assert result["reassigned"][0]["requested"] == 3000
+    with db.session_scope() as session:
+        web = session.scalars(select(Service)).first()
+        assert web.assigned_port != 3000
+
+
+def test_import_adopts_init_reservation(tmp_path, temp_db, monkeypatch):
+    monkeypatch.setattr(ports, "list_listening", lambda: [])
+    # init had reserved 23456 for "web"; importing should keep that port and
+    # release the placeholder reservation (the service now owns it).
+    with db.session_scope() as session:
+        session.add(PortReservation(port=23456, purpose="portman-init:web"))
+
+    _write(tmp_path, "services:\n  - name: web\n    command: x\n    port: 23456\n")
+    with db.session_scope() as session:
+        result = import_manifest(session, str(tmp_path))
+
+    assert result["reassigned"] == []  # its own reservation is not a conflict
+    with db.session_scope() as session:
+        web = session.scalars(select(Service)).first()
+        assert web.assigned_port == 23456
+        assert session.scalars(select(PortReservation)).first() is None
